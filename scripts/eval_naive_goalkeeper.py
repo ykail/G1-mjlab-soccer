@@ -37,7 +37,11 @@ if str(_REPO_ROOT) not in sys.path:
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import list_tasks, load_env_cfg
-from src.tasks.soccer.config.g1.rl_cfg import GoalkeeperRunner, unitree_g1_goalkeeper_ppo_runner_cfg
+from src.tasks.soccer.config.g1.rl_cfg import (
+  GoalkeeperRunner,
+  unitree_g1_goalkeeper_himppo_amp_runner_cfg,
+  unitree_g1_goalkeeper_ppo_runner_cfg,
+)
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
 from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
@@ -95,7 +99,6 @@ def _load_policy(checkpoint_path: str, env, device: str):
     runner.alg.actor.load_state_dict(actor_state, strict=False)
   else:
     # Our distilled native rsl_rl MLP policy (actor_state_dict / critic_state_dict).
-    print("[INFO] Detected native MLP checkpoint — loading.")
     from mjlab.rl import MjlabOnPolicyRunner
     from src.tasks.soccer.config.g1.gk_train_cfg import (
       GoalkeeperRecurrentRunner,
@@ -105,32 +108,44 @@ def _load_policy(checkpoint_path: str, env, device: str):
       goalkeeper_train_runner_cfg,
     )
     meta = loaded.get("ballistic_residual")
-    if meta:
-      print("[INFO] Detected ballistic residual checkpoint — loading frozen-base actor.")
-      import src.tasks.soccer.modules.gk_ballistic_residual as gkbr
-
-      gkbr.BASE_CKPT = meta.get("base")
-      gkbr.BASE_HIDDEN = tuple(meta.get("base_hidden", (1024, 512, 256)))
-      gkbr.RESIDUAL_SCALE = float(meta.get("residual_scale", 0.25))
-      agent_cfg = goalkeeper_ballistic_residual_runner_cfg()
-    elif loaded.get("goalkeeper_lstm_student"):
-      print("[INFO] Detected recurrent goalkeeper student checkpoint — loading.")
-      agent_cfg = goalkeeper_lstm_student_runner_cfg()
-    elif (
-      loaded.get("goalkeeper_lstm_ppo")
-      or "lstm" in str(checkpoint_path).lower()
-      or any(".rnn." in key or key.startswith("rnn.") for key in loaded.get("actor_state_dict", {}))
-    ):
-      print("[INFO] Detected pure recurrent goalkeeper PPO checkpoint — loading.")
-      agent_cfg = goalkeeper_lstm_ppo_runner_cfg()
-      runner = GoalkeeperRecurrentRunner(env, asdict(agent_cfg), device=device)
-      runner.load(checkpoint_path, load_cfg={"actor": True})
-      print("[INFO] Policy loaded successfully.")
-      return runner.get_inference_policy(device=env.unwrapped.device)
+    actor_state = loaded.get("actor_state_dict", {})
+    if any(key.startswith("history_encoder.") for key in actor_state):
+      print("[INFO] Detected native HIMPPO/AMP ActorCritic checkpoint — loading.")
+      agent_cfg = unitree_g1_goalkeeper_himppo_amp_runner_cfg()
+      train_cfg = asdict(agent_cfg)
+      # Evaluation only needs the actor.  Avoid constructing AMP discriminators
+      # and loading motion priors on the eval path.
+      train_cfg["algorithm"]["amp_cfg"]["enabled"] = False
+      runner = GoalkeeperRunner(env, train_cfg, device=device)
+      runner.alg.actor.load_state_dict(actor_state, strict=False)
     else:
-      agent_cfg = goalkeeper_train_runner_cfg()
-    runner = MjlabOnPolicyRunner(env, asdict(agent_cfg), device=device)
-    runner.load(checkpoint_path, load_cfg={"actor": True})
+      if meta:
+        print("[INFO] Detected ballistic residual checkpoint — loading frozen-base actor.")
+        import src.tasks.soccer.modules.gk_ballistic_residual as gkbr
+
+        gkbr.BASE_CKPT = meta.get("base")
+        gkbr.BASE_HIDDEN = tuple(meta.get("base_hidden", (1024, 512, 256)))
+        gkbr.RESIDUAL_SCALE = float(meta.get("residual_scale", 0.25))
+        agent_cfg = goalkeeper_ballistic_residual_runner_cfg()
+      elif loaded.get("goalkeeper_lstm_student"):
+        print("[INFO] Detected recurrent goalkeeper student checkpoint — loading.")
+        agent_cfg = goalkeeper_lstm_student_runner_cfg()
+      elif (
+        loaded.get("goalkeeper_lstm_ppo")
+        or "lstm" in str(checkpoint_path).lower()
+        or any(".rnn." in key or key.startswith("rnn.") for key in loaded.get("actor_state_dict", {}))
+      ):
+        print("[INFO] Detected pure recurrent goalkeeper PPO checkpoint — loading.")
+        agent_cfg = goalkeeper_lstm_ppo_runner_cfg()
+        runner = GoalkeeperRecurrentRunner(env, asdict(agent_cfg), device=device)
+        runner.load(checkpoint_path, load_cfg={"actor": True})
+        print("[INFO] Policy loaded successfully.")
+        return runner.get_inference_policy(device=env.unwrapped.device)
+      else:
+        print("[INFO] Detected native MLP checkpoint — loading.")
+        agent_cfg = goalkeeper_train_runner_cfg()
+      runner = MjlabOnPolicyRunner(env, asdict(agent_cfg), device=device)
+      runner.load(checkpoint_path, load_cfg={"actor": True})
 
   print("[INFO] Policy loaded successfully.")
   policy = runner.get_inference_policy(device=env.unwrapped.device)

@@ -289,3 +289,45 @@ def unitree_g1_goalkeeper_lstm_block_env_cfg(play: bool = False) -> ManagerBased
       params={"std": 0.35},
     )
   return cfg
+
+
+def unitree_g1_goalkeeper_himppo_amp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Goalkeeper env tuned for HIMPPO estimator supervision plus AMP."""
+  cfg = unitree_g1_goalkeeper_lstm_ppo_env_cfg(play=play)
+  if play:
+    return cfg
+
+  reset_ball = cfg.events["reset_ball"]
+  vel_cfg = reset_ball.params["vel_cfg"]
+  vel_cfg.curriculum_warmup_calls = 160_000
+  vel_cfg.speed_warmup_calls = 120_000
+  vel_cfg.difficulty_min = 0.20
+  vel_cfg.t_flight_slow_factor = 1.6
+
+  # Keep weak high/mid regions represented while AMP provides motion style.
+  _set_goalkeeper_region_weights(cfg, (1.4, 1.4, 1.8, 1.8, 0.8, 0.8))
+
+  cfg.rewards["ee_reach"] = replace(
+    cfg.rewards["ee_reach"],
+    weight=12.0,
+    params={**cfg.rewards["ee_reach"].params, "std": 0.45, "planar": True},
+  )
+  cfg.rewards["stop_ball"] = replace(cfg.rewards["stop_ball"], weight=120.0)
+  cfg.rewards["goal_conceded"] = replace(cfg.rewards["goal_conceded"], weight=-70.0)
+  cfg.rewards["intercept_point"] = replace(
+    cfg.rewards["intercept_point"],
+    weight=18.0,
+    params={"std": 0.38},
+  )
+  cfg.rewards["body_intercept"] = replace(
+    cfg.rewards["body_intercept"],
+    weight=4.0,
+    params={"std": 0.35},
+  )
+  cfg.rewards["posture_orientation"] = replace(
+    cfg.rewards["posture_orientation"],
+    weight=0.8,
+  )
+  cfg.rewards["feet_slippage"] = replace(cfg.rewards["feet_slippage"], weight=-0.6)
+  cfg.rewards["ang_vel_xy"] = replace(cfg.rewards["ang_vel_xy"], weight=-0.02)
+  return cfg

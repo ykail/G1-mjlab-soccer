@@ -5,6 +5,8 @@ Two configs:
   - LSTM: [128, 64, 32] ELU + LSTM(2×128)  (training, matches reference)
 """
 
+from dataclasses import dataclass, field
+
 from mjlab.rl import (
   MjlabOnPolicyRunner,
   RslRlModelCfg,
@@ -99,6 +101,34 @@ class SoccerRecurrentRunner(MjlabOnPolicyRunner):
 
 _GK_ACTOR_HIDDEN = (512, 256, 256)
 _GK_CRITIC_HIDDEN = (512, 256, 256)
+_GK_AMP_CFG = {
+  "enabled": True,
+  "motion_dir": "src/assets/soccer/motions/goalkeeper",
+  "reward_mode": "mix",
+  "reward_coef": 0.35,
+  "reward_dt": 1.0,
+  "disc_loss_coef": 1.0,
+  "hidden_dims": (512, 256),
+  "activation": "relu",
+  "learning_rate": 1.0e-4,
+  "grad_penalty_coef": 0.1,
+  "num_reward_samples": 4,
+  "reward_sigma": 0.3,
+  "reward_scale": 0.5,
+  "weight_decay": 1.0e-4,
+}
+
+
+@dataclass
+class GoalkeeperPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
+  """PPO algorithm config extended with goalkeeper estimator/AMP params."""
+
+  estimator_ball_loss_coef: float = 1.0
+  estimator_region_loss_coef: float = 0.5
+  value_smoothness_coef: float = 0.1
+  smoothness_upper_bound: float = 1.0
+  smoothness_lower_bound: float = 0.1
+  amp_cfg: dict = field(default_factory=lambda: dict(_GK_AMP_CFG))
 
 
 def unitree_g1_goalkeeper_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
@@ -164,4 +194,49 @@ class GoalkeeperRunner(MjlabOnPolicyRunner):
     from src.tasks.soccer.modules.gk_actor_critic import GoalkeeperActorCritic
 
     rsl_rl.models.GoalkeeperActorCritic = GoalkeeperActorCritic
+    train_cfg["algorithm"].setdefault("rnd_cfg", None)
+    train_cfg["algorithm"].setdefault("symmetry_cfg", None)
     super().__init__(env, train_cfg, log_dir, device, **kwargs)
+
+
+def unitree_g1_goalkeeper_himppo_amp_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Goalkeeper runner config for HIMPPO-style estimator + AMP training."""
+  return RslRlOnPolicyRunnerCfg(
+    actor=RslRlModelCfg(
+      hidden_dims=_GK_ACTOR_HIDDEN,
+      activation="elu",
+      obs_normalization=False,
+      distribution_cfg={
+        "class_name": "GaussianDistribution",
+        "init_std": 1.0,
+        "std_type": "scalar",
+      },
+      class_name="src.tasks.soccer.modules.gk_actor_critic:GoalkeeperActorCritic",
+    ),
+    critic=RslRlModelCfg(
+      hidden_dims=_GK_CRITIC_HIDDEN,
+      activation="elu",
+      obs_normalization=False,
+      class_name="src.tasks.soccer.modules.gk_actor_critic:GoalkeeperActorCritic",
+    ),
+    algorithm=GoalkeeperPpoAlgorithmCfg(
+      class_name="src.tasks.soccer.modules.goalkeeper_ppo:GoalkeeperPPO",
+      value_loss_coef=1.0,
+      use_clipped_value_loss=True,
+      clip_param=0.2,
+      entropy_coef=0.01,
+      num_learning_epochs=5,
+      num_mini_batches=8,
+      learning_rate=1.0e-3,
+      schedule="adaptive",
+      gamma=0.99,
+      lam=0.95,
+      desired_kl=0.01,
+      max_grad_norm=1.0,
+    ),
+    experiment_name="g1_goalkeeper_himppo_amp",
+    save_interval=100,
+    num_steps_per_env=100,
+    max_iterations=100000,
+    clip_actions=1.2,
+  )

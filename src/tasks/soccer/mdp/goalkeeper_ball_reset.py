@@ -147,6 +147,53 @@ class RegionBallVelCfg:
     return len(self.regions)
 
 
+def _compute_keeper_plane_target(
+  env: ManagerBasedRlEnv,
+  start_w: torch.Tensor,
+  vel_w: torch.Tensor,
+  env_ids: torch.Tensor,
+  interception_x: float = 0.0,
+) -> torch.Tensor:
+  """Predict the ballistic crossing point at the goalkeeper plane."""
+  target = torch.empty_like(start_w)
+  plane_x = env.scene.env_origins[env_ids, 0] + float(interception_x)
+  vx = vel_w[:, 0]
+  raw_t = (plane_x - start_w[:, 0]) / torch.where(
+    torch.abs(vx) > 1.0e-6,
+    vx,
+    torch.full_like(vx, -1.0e-6),
+  )
+  t = torch.clamp(raw_t, min=0.0, max=2.0)
+  target[:, 0] = plane_x
+  target[:, 1] = start_w[:, 1] + vel_w[:, 1] * t
+  target[:, 2] = torch.clamp(
+    start_w[:, 2] + vel_w[:, 2] * t - 0.5 * 9.81 * t * t,
+    min=0.0,
+  )
+  return target
+
+
+def _store_gk_tensor(
+  env: ManagerBasedRlEnv,
+  key: str,
+  env_ids: torch.Tensor,
+  value: torch.Tensor,
+  default: float = 0.0,
+) -> None:
+  """Store a per-env goalkeeper cache tensor, allocating it on first use."""
+  current = getattr(env, key, None)
+  expected_shape = (env.num_envs,) + tuple(value.shape[1:])
+  if current is None or current.shape != expected_shape:
+    current = torch.full(
+      expected_shape,
+      default,
+      dtype=value.dtype,
+      device=value.device,
+    )
+  current[env_ids] = value
+  setattr(env, key, current)
+
+
 def reset_ball_with_parabolic_trajectory(
   env: ManagerBasedRlEnv,
   env_ids: torch.Tensor | None,
@@ -180,9 +227,18 @@ def reset_ball_with_parabolic_trajectory(
     drs = asset.data.default_root_state
     quat = drs[env_ids, 3:7].clone()
     pos = forced["start"][env_ids]
-    vel = torch.cat([forced["vel"][env_ids], torch.zeros(n, 3, device=device)], dim=-1)
+    vel_lin = forced["vel"][env_ids]
+    vel = torch.cat([vel_lin, torch.zeros(n, 3, device=device)], dim=-1)
     asset.write_root_link_pose_to_sim(torch.cat([pos, quat], dim=-1), env_ids=env_ids)
     asset.write_root_link_velocity_to_sim(vel, env_ids=env_ids)
+    _store_gk_tensor(
+      env,
+      "_gk_ball_end_pos",
+      env_ids,
+      _compute_keeper_plane_target(env, pos, vel_lin, env_ids),
+    )
+    _store_gk_tensor(env, "_gk_ball_start_pos", env_ids, pos)
+    _store_gk_tensor(env, "_gk_ball_vel", env_ids, vel_lin)
     for key, val in (("_gk_region", forced["region"]),
                      ("_gk_ball_start_x", forced["start"][:, 0] - env.scene.env_origins[:, 0])):
       t = getattr(env, key, None)
@@ -222,6 +278,14 @@ def reset_ball_with_parabolic_trajectory(
       vel = torch.cat([vel_lin, torch.zeros(count, 3, device=device)], dim=-1)
       asset.write_root_link_pose_to_sim(torch.cat([pos, quat], dim=-1), env_ids=replay_ids)
       asset.write_root_link_velocity_to_sim(vel, env_ids=replay_ids)
+      _store_gk_tensor(
+        env,
+        "_gk_ball_end_pos",
+        replay_ids,
+        _compute_keeper_plane_target(env, pos, vel_lin, replay_ids),
+      )
+      _store_gk_tensor(env, "_gk_ball_start_pos", replay_ids, pos)
+      _store_gk_tensor(env, "_gk_ball_vel", replay_ids, vel_lin)
 
       for key, val in (("_gk_region", region),
                        ("_gk_ball_start_x", start_local[:, 0])):
@@ -373,6 +437,21 @@ def reset_ball_with_parabolic_trajectory(
     setattr(env, "_gk_ball_start_x", sx)
   sx[env_ids] = start_x
   setattr(env, "_gk_ball_start_x", sx)
+
+  _store_gk_tensor(
+    env,
+    "_gk_ball_end_pos",
+    env_ids,
+    _compute_keeper_plane_target(env, ball_start_w, ball_vel, env_ids),
+  )
+  _store_gk_tensor(env, "_gk_ball_start_pos", env_ids, ball_start_w)
+  _store_gk_tensor(env, "_gk_ball_vel", env_ids, ball_vel)
+  tf = getattr(env, "_gk_t_flight", None)
+  if tf is None or tf.shape[0] != env.num_envs:
+    tf = torch.zeros(env.num_envs, dtype=torch.float32, device=device)
+    setattr(env, "_gk_t_flight", tf)
+  tf[env_ids] = t_flight
+  setattr(env, "_gk_t_flight", tf)
 
   # Ball orientation unchanged from default.
   asset: Entity = env.scene[ball_cfg.name]
