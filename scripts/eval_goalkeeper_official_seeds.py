@@ -9,7 +9,9 @@ rate before applying the phase-1 linear score formula.
 from __future__ import annotations
 
 import json
+import os
 import random
+import subprocess
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass
@@ -47,6 +49,10 @@ class Cfg:
   device: str | None = None
   out: str = ""
   log: str = ""
+  parallel_seeds: bool = False
+  seed_gpus: tuple[int, ...] = ()
+  seed_log_dir: str = ""
+  single_seed_mode: bool = False
 
 
 class _Tee:
@@ -61,6 +67,12 @@ class _Tee:
   def flush(self) -> None:
     for stream in self._streams:
       stream.flush()
+
+  def isatty(self) -> bool:
+    return any(getattr(stream, "isatty", lambda: False)() for stream in self._streams)
+
+  def fileno(self) -> int:
+    return self._streams[0].fileno()
 
 
 def _set_seed(seed: int) -> None:
@@ -121,20 +133,7 @@ def _score(mean_rate: float, threshold: float, points: float) -> float:
   return max(0.0, min(1.0, frac)) * points
 
 
-def _run(cfg: Cfg) -> None:
-  import mjlab.tasks  # noqa: F401
-  import src.tasks  # noqa: F401
-  import src.tasks.soccer.config.eval  # noqa: F401
-
-  configure_torch_backends()
-  device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
-  print(
-    f"[INFO] checkpoint={cfg.checkpoint or '<zero policy>'} "
-    f"seeds={cfg.seeds} trials_per_seed={cfg.trials_per_seed}",
-    flush=True,
-  )
-
-  results = [_eval_seed(cfg, seed, device) for seed in cfg.seeds]
+def _summarize(cfg: Cfg, results: list[dict]) -> dict:
   total_blocked = sum(row["blocked"] for row in results)
   total_trials = sum(row["trials"] for row in results)
   mean_rate = sum(row["rate"] for row in results) / max(1, len(results))
@@ -158,6 +157,103 @@ def _run(cfg: Cfg) -> None:
   print(f"Pooled Block Rate: {total_blocked}/{total_trials} = {100.0 * pooled_rate:.2f}%")
   print(f"Score:             {score:.2f}/{cfg.score_points:.1f}")
   print("=" * 60)
+  return summary
+
+
+def _run_single_seed_cli(cfg: Cfg) -> None:
+  import mjlab.tasks  # noqa: F401
+  import src.tasks  # noqa: F401
+  import src.tasks.soccer.config.eval  # noqa: F401
+
+  if len(cfg.seeds) != 1:
+    raise ValueError("--single-seed-mode requires exactly one seed")
+  configure_torch_backends()
+  device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+  result = _eval_seed(cfg, cfg.seeds[0], device)
+  if not cfg.out:
+    raise ValueError("--out is required in --single-seed-mode")
+  out = Path(cfg.out)
+  out.parent.mkdir(parents=True, exist_ok=True)
+  out.write_text(json.dumps(result, indent=2) + "\n")
+  print(f"[INFO] wrote {out}", flush=True)
+
+
+def _run_parallel(cfg: Cfg) -> list[dict]:
+  out_root = Path(cfg.out).with_suffix("") if cfg.out else Path("logs/lyk/official_seed_eval")
+  seed_log_dir = Path(cfg.seed_log_dir) if cfg.seed_log_dir else out_root.parent / f"{out_root.name}_seed_logs"
+  seed_log_dir.mkdir(parents=True, exist_ok=True)
+
+  procs = []
+  for idx, seed in enumerate(cfg.seeds):
+    seed_json = seed_log_dir / f"seed_{seed}.json"
+    seed_log = seed_log_dir / f"seed_{seed}.log"
+    cmd = [
+      sys.executable,
+      str(Path(__file__).resolve()),
+      "--seeds", str(seed),
+      "--trials-per-seed", str(cfg.trials_per_seed),
+      "--max-steps", str(cfg.max_steps),
+      "--score-points", str(cfg.score_points),
+      "--score-threshold", str(cfg.score_threshold),
+      "--task-id", cfg.task_id,
+      "--out", str(seed_json),
+      "--log", str(seed_log),
+      "--single-seed-mode",
+    ]
+    if cfg.checkpoint:
+      cmd.extend(["--checkpoint", cfg.checkpoint])
+    if cfg.device:
+      cmd.extend(["--device", cfg.device])
+    env = os.environ.copy()
+    if cfg.seed_gpus:
+      env["CUDA_VISIBLE_DEVICES"] = str(cfg.seed_gpus[idx % len(cfg.seed_gpus)])
+      env["MUJOCO_EGL_DEVICE_ID"] = "0"
+      env.setdefault("PYOPENGL_PLATFORM", "egl")
+      env.setdefault("MUJOCO_GL", "egl")
+      cmd.extend(["--device", "cuda:0"])
+    print(f"[LAUNCH] seed {seed}: log={seed_log}", flush=True)
+    procs.append((seed, seed_json, seed_log, subprocess.Popen(cmd, env=env)))
+
+  results = []
+  failed = []
+  for seed, seed_json, seed_log, proc in procs:
+    code = proc.wait()
+    print(f"\n===== seed {seed} log tail =====")
+    if seed_log.exists():
+      lines = seed_log.read_text(errors="replace").splitlines()
+      print("\n".join(lines[-40:]))
+    if code != 0:
+      failed.append((seed, code, seed_log))
+      continue
+    results.append(json.loads(seed_json.read_text()))
+
+  if failed:
+    raise RuntimeError(f"seed eval failed: {failed}")
+  results.sort(key=lambda row: cfg.seeds.index(row["seed"]))
+  return results
+
+
+def _run(cfg: Cfg) -> None:
+  import mjlab.tasks  # noqa: F401
+  import src.tasks  # noqa: F401
+  import src.tasks.soccer.config.eval  # noqa: F401
+
+  if cfg.single_seed_mode:
+    _run_single_seed_cli(cfg)
+    return
+
+  configure_torch_backends()
+  device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+  print(
+    f"[INFO] checkpoint={cfg.checkpoint or '<zero policy>'} "
+    f"seeds={cfg.seeds} trials_per_seed={cfg.trials_per_seed}",
+    flush=True,
+  )
+
+  results = _run_parallel(cfg) if cfg.parallel_seeds else [
+    _eval_seed(cfg, seed, device) for seed in cfg.seeds
+  ]
+  summary = _summarize(cfg, results)
 
   if cfg.out:
     out = Path(cfg.out)
