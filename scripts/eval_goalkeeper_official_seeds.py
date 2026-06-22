@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import random
 import sys
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -45,6 +46,21 @@ class Cfg:
   task_id: str = "Eval-Goalkeeper"
   device: str | None = None
   out: str = ""
+  log: str = ""
+
+
+class _Tee:
+  def __init__(self, *streams):
+    self._streams = streams
+
+  def write(self, data: str) -> int:
+    for stream in self._streams:
+      stream.write(data)
+    return len(data)
+
+  def flush(self) -> None:
+    for stream in self._streams:
+      stream.flush()
 
 
 def _set_seed(seed: int) -> None:
@@ -105,7 +121,7 @@ def _score(mean_rate: float, threshold: float, points: float) -> float:
   return max(0.0, min(1.0, frac)) * points
 
 
-def main(cfg: Cfg) -> None:
+def _run(cfg: Cfg) -> None:
   import mjlab.tasks  # noqa: F401
   import src.tasks  # noqa: F401
   import src.tasks.soccer.config.eval  # noqa: F401
@@ -148,6 +164,21 @@ def main(cfg: Cfg) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, indent=2) + "\n")
     print(f"[INFO] wrote {out}", flush=True)
+
+
+def main(cfg: Cfg) -> None:
+  if not cfg.log:
+    _run(cfg)
+    return
+
+  log = Path(cfg.log)
+  log.parent.mkdir(parents=True, exist_ok=True)
+  with log.open("w") as f:
+    tee_out = _Tee(sys.stdout, f)
+    tee_err = _Tee(sys.stderr, f)
+    with redirect_stdout(tee_out), redirect_stderr(tee_err):
+      print(f"[INFO] logging to {log}", flush=True)
+      _run(cfg)
 
 
 if __name__ == "__main__":
