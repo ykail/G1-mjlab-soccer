@@ -80,6 +80,8 @@ def _default_fieldnames() -> list[str]:
     "env",
     "true_region",
     "true_region_name",
+    "used_region",
+    "used_region_name",
     "enter_step",
     "min_ball_x",
     "start_x",
@@ -159,8 +161,12 @@ def main(cfg: Cfg) -> None:
       start_local = start_pos - origins
       final_local = final_pos - origins
       goal_t, goal_y, goal_z = _crossing_features(start_local, start_vel)
+      used_region = getattr(policy, "latched", None)
+      if used_region is None or used_region.shape[0] != cfg.num_envs:
+        used_region = torch.full_like(true_region, -1)
       for idx in range(cfg.num_envs):
         region = int(true_region[idx])
+        routed_region = int(used_region[idx])
         fail = bool(entered[idx])
         region_total[region] += 1
         region_fail[region] += int(fail)
@@ -172,6 +178,12 @@ def main(cfg: Cfg) -> None:
             "env": idx,
             "true_region": region,
             "true_region_name": _REGION_NAMES[region],
+            "used_region": routed_region,
+            "used_region_name": (
+              _REGION_NAMES[routed_region]
+              if 0 <= routed_region < len(_REGION_NAMES)
+              else "Unknown"
+            ),
             "enter_step": int(enter_step[idx]),
             "min_ball_x": float(min_goal_x[idx]),
             "start_x": float(start_local[idx, 0]),

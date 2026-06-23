@@ -264,6 +264,10 @@ python scripts/collect_goalkeeper_failures.py \
   --device cuda:0
 ```
 
+For MoE6 checkpoints this CSV records both `true_region` and `used_region`.
+The latter is the expert selected by the MoE gate; specialist replay uses
+`used_region` when available.
+
 Extract the six experts:
 
 ```bash
@@ -286,6 +290,10 @@ python scripts/launch_moe6_failure_replay.py \
   --block-iters 12 \
   --eval-resets 6
 ```
+
+By default this launcher preserves each expert checkpoint's own residual scale.
+Only pass `--residual-scale <value>` if you intentionally want to override that
+metadata; overriding it can change the base MoE before training even starts.
 
 Evaluate the bundled result:
 

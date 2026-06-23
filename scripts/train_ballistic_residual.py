@@ -249,7 +249,8 @@ def _load_failure_bank(cfg: Cfg, device: str) -> dict | None:
   allowed = set(cfg.failure_regions)
   with open(cfg.failure_csv, newline="") as f:
     for row in csv.DictReader(f):
-      region = int(row["true_region"])
+      region_key = "used_region" if row.get("used_region", "") not in ("", "-1") else "true_region"
+      region = int(row[region_key])
       if allowed and region not in allowed:
         continue
       starts.append([float(row["start_x"]), float(row["start_y"]), float(row["start_z"])])

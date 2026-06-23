@@ -40,7 +40,7 @@ class Cfg:
   eval_resets: int = 6
   lr: float = 2.0e-5
   std: float = 0.02
-  residual_scale: float = 0.18
+  residual_scale: float = 0.0
   failure_replay_ratio: float = 0.65
   failure_pos_jitter: float = 0.012
   failure_vel_jitter: float = 0.025
@@ -59,7 +59,7 @@ def _meta(expert_dir: str) -> dict:
 def _cmd(cfg: Cfg, region: int) -> list[str]:
   init = Path(cfg.expert_dir) / f"{cfg.prefix}{region}.pt"
   out = Path(cfg.out_dir) / f"{cfg.prefix}{region}.pt"
-  return [
+  cmd = [
     sys.executable,
     "scripts/train_ballistic_residual.py",
     "--init",
@@ -92,8 +92,6 @@ def _cmd(cfg: Cfg, region: int) -> list[str]:
     str(cfg.lr),
     "--std",
     str(cfg.std),
-    "--residual-scale",
-    str(cfg.residual_scale),
     "--stable-save-weight",
     str(cfg.stable_save_weight),
     "--rollback-drop",
@@ -130,8 +128,11 @@ def _cmd(cfg: Cfg, region: int) -> list[str]:
     "0.0025",
     "--device",
     "cuda:0",
-    *cfg.extra_args,
   ]
+  if cfg.residual_scale > 0.0:
+    cmd.extend(["--residual-scale", str(cfg.residual_scale)])
+  cmd.extend(cfg.extra_args)
+  return cmd
 
 
 def _bundle(cfg: Cfg) -> None:
