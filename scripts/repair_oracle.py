@@ -241,7 +241,7 @@ def main(cfg: Cfg):
     return cost, ~entered, min_d
 
   all_data_obs, all_data_act, all_data_base_act, all_data_blk = [], [], [], []
-  agg_base, agg_rep, agg_n = 0, 0, 0
+  agg_base, agg_rep, agg_union, agg_n = 0, 0, 0, 0
   for b in range(cfg.batches):
     reg, start, end, tf = _gen_scenarios(env, cfg.regions, cfg.region_weights, cfg.G, gen, dev)
     vel = _ball_vel(start, end, tf)
@@ -254,9 +254,13 @@ def main(cfg: Cfg):
     else:
       _, base_blk, _ = rollout(z, start, vel, reg)
     base_rate = base_blk.view(cfg.G, cfg.P).float().mean(1)   # per scenario
-    # CEM (iCEM: keep-best-ever per scenario + elite carryover)
+    # CEM (iCEM: keep-best-ever per scenario + elite carryover). The final
+    # repair uses the best sampled candidate, not the elite mean: blocking is a
+    # threshold event, so averaging two good dive timings can create a bad one.
     mu = torch.zeros(cfg.G, K, J, device=dev)
     sig = torch.full((cfg.G, K, J), cfg.init_std, device=dev)
+    best_cost = torch.full((cfg.G,), float("inf"), device=dev)
+    best_knots = torch.zeros(cfg.G, K, J, device=dev)
     carry = None  # (G, nkeep, K, J) elites carried from previous iter
     nkeep = max(1, cfg.elites // 4)
     for it in range(cfg.iters):
@@ -269,14 +273,22 @@ def main(cfg: Cfg):
         knots = knots_g.view(N, K, J)
       cost, blk_, _ = rollout(knots, start, vel, reg)
       cost_g = cost.view(cfg.G, cfg.P)
+      best_val, best_idx = cost_g.min(1)
+      improved = best_val < best_cost
+      if improved.any():
+        best_cost[improved] = best_val[improved]
+        best_knots[improved] = knots_g[
+          improved,
+          best_idx[improved],
+        ]
       ei = cost_g.topk(cfg.elites, largest=False).indices   # (G,E)
       el = torch.gather(knots_g, 1, ei[:, :, None, None].expand(-1, -1, K, J))
       mu = cfg.smooth * el.mean(1) + (1 - cfg.smooth) * mu
       sig = cfg.smooth * el.std(1) + (1 - cfg.smooth) * sig
       sig = sig.clamp(min=0.03)
       carry = el[:, :nkeep].clone()               # best nkeep elites for next iter
-    # final deterministic eval of the repair (elite-mean = CEM point estimate)
-    mu_e = mu.repeat_interleave(cfg.P, 0)
+    # final deterministic eval of the repair (best candidate per scenario).
+    mu_e = best_knots.repeat_interleave(cfg.P, 0)
     if cfg.mode == "collect":
       _, rep_blk, _, rep_ob, rep_ac, rep_ba, rep_gz = rollout(mu_e, start, vel, reg, collect=True)
       bbk = base_blk[keep].cpu()          # (G,) base blocked at keep env
@@ -296,14 +308,17 @@ def main(cfg: Cfg):
     else:
       _, rep_blk, _ = rollout(mu_e, start, vel, reg)
     rep_rate = rep_blk.view(cfg.G, cfg.P).float().mean(1)
-    nb = int(base_rate.sum() * 1);
+    union_rate = (base_blk | rep_blk).view(cfg.G, cfg.P).float().mean(1)
     agg_base += float(base_rate.mean()) * cfg.G
     agg_rep += float(rep_rate.mean()) * cfg.G
+    agg_union += float(union_rate.mean()) * cfg.G
     agg_n += cfg.G
     print(f"  batch {b+1}/{cfg.batches}: base {100*float(base_rate.mean()):.1f}% -> "
-          f"repaired {100*float(rep_rate.mean()):.1f}%  (n={cfg.G})", flush=True)
+          f"repaired {100*float(rep_rate.mean()):.1f}% ; "
+          f"base_or_repair {100*float(union_rate.mean()):.1f}%  (n={cfg.G})", flush=True)
   print(f"\n{'='*60}\n  REGIONS {[_REGION[r] for r in cfg.regions]}\n"
         f"  base {100*agg_base/agg_n:.1f}%  ->  repaired {100*agg_rep/agg_n:.1f}%   "
+        f"; base_or_repair {100*agg_union/agg_n:.1f}%   "
         f"(over {agg_n} scenarios)\n{'='*60}")
   if cfg.mode == "collect" and cfg.out:
     obs = torch.cat(all_data_obs); act = torch.cat(all_data_act); bk = torch.cat(all_data_blk)

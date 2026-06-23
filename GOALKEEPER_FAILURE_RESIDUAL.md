@@ -360,10 +360,22 @@ branch and is designed for an 8-hour, 4-GPU H20 window.
 The pipeline:
 
 1. runs a small CEM proof on hard regions;
-2. collects independent CEM repair shards on all GPUs until the time budget is
+2. stops immediately if the proof does not show a useful conservative gain;
+3. collects independent CEM repair shards on all GPUs until the time budget is
    nearly exhausted;
-3. distills the repaired actions into a frozen-base MoE6 residual policy;
-4. evaluates several residual strengths and writes a ranked summary.
+4. distills the repaired actions into a frozen-base MoE6 residual policy;
+5. evaluates several residual strengths and writes a ranked summary.
+
+The proof log prints three rates:
+
+- `base`: the frozen MoE6 base on this hard, biased proof distribution.  It is
+  not the official uniform-seed 93% score.
+- `repaired`: always use the CEM repair action.  This can be lower than base
+  because some repair actions are intentionally aggressive.
+- `base_or_repair`: keep base successes and only count repair wins on base
+  failures.  This is the important upper-bound number for the conservative
+  residual strategy.  The automation only continues collection if this beats
+  `base` by at least `--prove-min-union-gain` (default: 2 percentage points).
 
 Run:
 
@@ -379,6 +391,7 @@ python scripts/run_keeper_big_repair.py \
   --P 48 \
   --iters 7 \
   --collect-batches-per-shard 4 \
+  --prove-min-union-gain 0.02 \
   --distill-epochs 70 \
   --official-trials-per-seed 50
 ```

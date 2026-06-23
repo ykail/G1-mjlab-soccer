@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -44,6 +45,8 @@ class Cfg:
   release_steps: int = 20
   collect_batches_per_shard: int = 4
   max_shards: int = 999
+  prove_min_union_gain: float = 0.02
+  continue_on_bad_prove: bool = False
   distill_epochs: int = 70
   batch_size: int = 32768
   residual_scales: tuple[float, ...] = (0.08, 0.12, 0.18)
@@ -155,6 +158,21 @@ def _repair_cmd(cfg: Cfg, mode: str, out: str, seed: int, batches: int) -> list[
 
 def _existing_shards(out_root: Path) -> list[str]:
   return sorted(str(path) for path in (out_root / "repairs").glob("repairs_shard*.pt"))
+
+
+def _read_prove_result(log_path: Path) -> tuple[float, float, float] | None:
+  """Return final (base, repaired, base_or_repair) rates in [0,1]."""
+  if not log_path.exists():
+    return None
+  text = log_path.read_text(errors="replace")
+  matches = re.findall(
+    r"base\s+([0-9.]+)%\s+->\s+repaired\s+([0-9.]+)%\s+;\s+base_or_repair\s+([0-9.]+)%",
+    text,
+  )
+  if not matches:
+    return None
+  base, repaired, union = matches[-1]
+  return float(base) / 100.0, float(repaired) / 100.0, float(union) / 100.0
 
 
 def _collect(cfg: Cfg, out_root: Path, deadline: float) -> list[str]:
@@ -278,7 +296,31 @@ def main(cfg: Cfg) -> None:
 
   if cfg.prove:
     cmd = _repair_cmd(cfg, "prove", "", cfg.seed, batches=2)
-    _run("PROVE", cmd, out_root / "logs" / "prove.log", gpu=cfg.devices[0], check=False)
+    prove_log = out_root / "logs" / "prove.log"
+    _run("PROVE", cmd, prove_log, gpu=cfg.devices[0], check=False)
+    prove_result = _read_prove_result(prove_log)
+    if prove_result is None:
+      msg = "[PROVE] could not parse proof result; refusing to collect blindly"
+      if not cfg.continue_on_bad_prove and cfg.collect:
+        print(msg, flush=True)
+        return
+      print(msg + " because --continue-on-bad-prove was set", flush=True)
+    else:
+      base_rate, repaired_rate, union_rate = prove_result
+      gain = union_rate - base_rate
+      print(
+        f"[PROVE] base={100*base_rate:.1f}% repaired={100*repaired_rate:.1f}% "
+        f"base_or_repair={100*union_rate:.1f}% gain={100*gain:+.1f}%",
+        flush=True,
+      )
+      if cfg.collect and gain < cfg.prove_min_union_gain and not cfg.continue_on_bad_prove:
+        print(
+          "[PROVE] aborting before collection: proof did not show enough "
+          f"base_or_repair gain (need {100*cfg.prove_min_union_gain:.1f}%).",
+          flush=True,
+        )
+        print("[PROVE] rerun with --continue-on-bad-prove only if you intentionally want to burn time.", flush=True)
+        return
 
   shards = _existing_shards(out_root)
   if cfg.collect:
