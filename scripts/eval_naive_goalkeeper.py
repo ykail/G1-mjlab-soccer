@@ -89,6 +89,23 @@ def _load_policy(checkpoint_path: str, env, device: str):
     print("[INFO] Policy loaded successfully.")
     return policy
 
+  if isinstance(loaded, dict) and loaded.get("moe6_residual"):
+    print("[INFO] Detected MoE6 residual checkpoint — loading frozen-base residual.")
+    from src.tasks.soccer.modules.gk_moe6_residual import GoalkeeperMoE6ResidualPolicy
+
+    policy = GoalkeeperMoE6ResidualPolicy(
+      env,
+      loaded["base_moe6"],
+      device,
+      hidden_dims=tuple(loaded.get("hidden_dims", (512, 256, 128))),
+      activation=str(loaded.get("activation", "elu")),
+      residual_scale=float(loaded.get("residual_scale", 0.18)),
+    )
+    policy.load_state_dict(loaded["policy_state_dict"], strict=False)
+    policy.eval()
+    print("[INFO] Policy loaded successfully.")
+    return policy
+
   if "model_state_dict" in loaded:
     # Reference Humanoid-Goalkeeper checkpoint: a single unified HIMPPO
     # ActorCritic. Load it directly into GoalkeeperRunner's custom model.

@@ -350,3 +350,46 @@ python scripts/eval_goalkeeper_official_seeds.py \
   --seed-gpus 0 1 2 \
   --out logs/keeper_moe6_failure_replay/eval_hybrid_selected.json
 ```
+
+## Big Repair Run
+
+When gate sweep and PPO-style failure replay do not clearly beat the 93% MoE6
+base, use the repair-oracle pipeline.  This is the largest experiment in this
+branch and is designed for an 8-hour, 4-GPU H20 window.
+
+The pipeline:
+
+1. runs a small CEM proof on hard regions;
+2. collects independent CEM repair shards on all GPUs until the time budget is
+   nearly exhausted;
+3. distills the repaired actions into a frozen-base MoE6 residual policy;
+4. evaluates several residual strengths and writes a ranked summary.
+
+Run:
+
+```bash
+python scripts/run_keeper_big_repair.py \
+  --base checkpoints/keeper_93_moe6.pt \
+  --out-root logs/keeper_big_repair \
+  --devices 0 1 2 3 \
+  --hours 8 \
+  --regions 1 2 3 5 \
+  --region-weights 1.2 1.4 2.0 1.2 \
+  --G 16 \
+  --P 48 \
+  --iters 7 \
+  --collect-batches-per-shard 4 \
+  --distill-epochs 70 \
+  --official-trials-per-seed 50
+```
+
+Outputs:
+
+- repair shards: `logs/keeper_big_repair/repairs/repairs_shard*.pt`
+- distilled checkpoints: `logs/keeper_big_repair/distilled/*.pt`
+- eval JSON: `logs/keeper_big_repair/eval/*.json`
+- ranked summary: `logs/keeper_big_repair/summary.json`
+
+This experiment should be treated as an A/B candidate generator.  If the best
+checkpoint in `summary.json` is not above the original MoE6 base under the same
+official protocol, discard it and keep the base.

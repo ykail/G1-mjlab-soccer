@@ -123,6 +123,16 @@ def _apply(env, robot, ball, start, vel, P, region):
   return obs
 
 
+def _reset_policy(policy) -> None:
+  reset = getattr(policy, "reset", None)
+  if reset is None:
+    return
+  try:
+    reset()
+  except TypeError:
+    reset(None)
+
+
 def _ball_vel(start, end, t_flight):
   g = 9.81
   vxy = (end[:, :2] - start[:, :2]) / t_flight[:, None]
@@ -185,18 +195,21 @@ def main(cfg: Cfg):
     R = torch.einsum('tk,nkj->ntj', W, knots).clamp(-cfg.clip, cfg.clip)  # (N,T,J)
     R = R * fade[None, :, None]
     obs = _apply(env, robot, ball, scen_start, scen_vel, cfg.P, scen_region)
+    _reset_policy(base)
     entered = torch.zeros(N, dtype=torch.bool, device=dev)
     min_d = torch.full((N,), 1e9, device=dev)
     upr_bad = torch.zeros(N, device=dev)
     stable_bad = torch.zeros(N, device=dev)
     obs_buf = [] if collect else None
     act_buf = [] if collect else None
+    base_act_buf = [] if collect else None
     for t in range(T):
       with torch.inference_mode():
         ba = base(obs)
       a = (ba + R[:, t]).clamp(-100, 100)
       if collect:
         obs_buf.append(obs["actor"][keep].to("cpu")); act_buf.append(a[keep].to("cpu"))
+        base_act_buf.append(ba[keep].to("cpu"))
       res = env.step(a); obs = res[0]
       bp = ball.data.root_link_pos_w
       bx = bp[:, 0] - env.unwrapped.scene.env_origins[:, 0]
@@ -216,10 +229,18 @@ def main(cfg: Cfg):
             + cfg.w_stable * stable_bad / T
             + cfg.w_final_upright * torch.clamp(final_gz + 0.5, min=0.0))
     if collect:
-      return cost, ~entered, min_d, torch.stack(obs_buf, 1), torch.stack(act_buf, 1), final_gz[keep].to("cpu")
+      return (
+        cost,
+        ~entered,
+        min_d,
+        torch.stack(obs_buf, 1),
+        torch.stack(act_buf, 1),
+        torch.stack(base_act_buf, 1),
+        final_gz[keep].to("cpu"),
+      )
     return cost, ~entered, min_d
 
-  all_data_obs, all_data_act, all_data_blk = [], [], []
+  all_data_obs, all_data_act, all_data_base_act, all_data_blk = [], [], [], []
   agg_base, agg_rep, agg_n = 0, 0, 0
   for b in range(cfg.batches):
     reg, start, end, tf = _gen_scenarios(env, cfg.regions, cfg.region_weights, cfg.G, gen, dev)
@@ -229,7 +250,7 @@ def main(cfg: Cfg):
     # action) — this protects the easy-ball behavior from CEM residual noise.
     z = torch.zeros(N, K, J, device=dev)
     if cfg.mode == "collect":
-      _, base_blk, _, base_ob, base_ac, base_gz = rollout(z, start, vel, reg, collect=True)
+      _, base_blk, _, base_ob, base_ac, base_ba, base_gz = rollout(z, start, vel, reg, collect=True)
     else:
       _, base_blk, _ = rollout(z, start, vel, reg)
     base_rate = base_blk.view(cfg.G, cfg.P).float().mean(1)   # per scenario
@@ -257,7 +278,7 @@ def main(cfg: Cfg):
     # final deterministic eval of the repair (elite-mean = CEM point estimate)
     mu_e = mu.repeat_interleave(cfg.P, 0)
     if cfg.mode == "collect":
-      _, rep_blk, _, rep_ob, rep_ac, rep_gz = rollout(mu_e, start, vel, reg, collect=True)
+      _, rep_blk, _, rep_ob, rep_ac, rep_ba, rep_gz = rollout(mu_e, start, vel, reg, collect=True)
       bbk = base_blk[keep].cpu()          # (G,) base blocked at keep env
       rbk = rep_blk[keep].cpu()           # (G,) repair blocked at keep env
       if cfg.require_final_upright:
@@ -266,9 +287,11 @@ def main(cfg: Cfg):
       use_base = bbk[:, None, None]       # prefer pure base action where it works
       ob = torch.where(use_base, base_ob, rep_ob)
       ac = torch.where(use_base, base_ac, rep_ac)
+      ba = torch.where(use_base, base_ba, rep_ba)
       blocked = (bbk | rbk)[:, None] & collect_window(start, vel).cpu()
       all_data_obs.append(ob.reshape(-1, ob.shape[-1]))
       all_data_act.append(ac.reshape(-1, ac.shape[-1]))
+      all_data_base_act.append(ba.reshape(-1, ba.shape[-1]))
       all_data_blk.append(blocked.reshape(-1))
     else:
       _, rep_blk, _ = rollout(mu_e, start, vel, reg)
@@ -284,8 +307,9 @@ def main(cfg: Cfg):
         f"(over {agg_n} scenarios)\n{'='*60}")
   if cfg.mode == "collect" and cfg.out:
     obs = torch.cat(all_data_obs); act = torch.cat(all_data_act); bk = torch.cat(all_data_blk)
+    base_act = torch.cat(all_data_base_act)
     Path(cfg.out).parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"obs": obs, "act": act, "blocked": bk}, cfg.out)
+    torch.save({"obs": obs, "act": act, "base_act": base_act, "blocked": bk}, cfg.out)
     print(f"  saved {obs.shape[0]} (obs,act) pairs to {cfg.out}  "
           f"(repaired-blocked frac {float(bk.float().mean()):.2f})")
   env.close()
