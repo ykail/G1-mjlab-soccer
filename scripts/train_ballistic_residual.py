@@ -124,6 +124,20 @@ def _set_region_weights(env, weights: tuple[float, ...]) -> tuple[float, ...]:
   return old
 
 
+def _disable_failure_replay(env):
+  base_env = env.unwrapped
+  sentinel = object()
+  old_bank = getattr(base_env, "_gk_failure_bank", sentinel)
+  if old_bank is not sentinel:
+    delattr(base_env, "_gk_failure_bank")
+  return old_bank, sentinel
+
+
+def _restore_failure_replay(env, old_bank, sentinel) -> None:
+  if old_bank is not sentinel:
+    setattr(env.unwrapped, "_gk_failure_bank", old_bank)
+
+
 def _restrict_train_regions(env_cfg, train_regions: tuple[int, ...]) -> None:
   if not train_regions:
     return
@@ -151,6 +165,7 @@ def _eval(
   final_ang_vel_xy: float = 3.0,
 ) -> EvalStats:
   old_weights = _set_region_weights(env, ())
+  old_bank, sentinel = _disable_failure_replay(env)
   num_envs = env.unwrapped.num_envs
   origins = env.unwrapped.scene.env_origins
   robot = env.unwrapped.scene["robot"]
@@ -191,6 +206,7 @@ def _eval(
     )
     return EvalStats(block_rate, upright_rate, stable_save_rate, score)
   finally:
+    _restore_failure_replay(env, old_bank, sentinel)
     _set_region_weights(env, old_weights)
 
 
