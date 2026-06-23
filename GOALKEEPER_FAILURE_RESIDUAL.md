@@ -323,3 +323,30 @@ python scripts/launch_moe6_failure_replay.py \
   --residual-scale 0.14 \
   --blocks 80
 ```
+
+If a failure-replay MoE6 bundle evaluates below the original 93% checkpoint,
+stop training and run hybrid selection.  This checks whether any tuned expert is
+useful by itself while leaving the other regions at the original base:
+
+```bash
+python scripts/select_moe6_hybrid.py \
+  --base-dir logs/keeper_moe6_failure_replay/base_experts \
+  --tuned-dir logs/keeper_moe6_failure_replay/experts \
+  --out-root logs/keeper_moe6_failure_replay/hybrid_select \
+  --final logs/keeper_moe6_failure_replay/keeper_93_hybrid_selected.pt \
+  --regions 1 2 3 5 \
+  --num-envs 512 \
+  --batches 24 \
+  --device cuda:0
+```
+
+Then run official eval on the selected hybrid:
+
+```bash
+python scripts/eval_goalkeeper_official_seeds.py \
+  --checkpoint logs/keeper_moe6_failure_replay/keeper_93_hybrid_selected.pt \
+  --trials-per-seed 50 \
+  --parallel-seeds \
+  --seed-gpus 0 1 2 \
+  --out logs/keeper_moe6_failure_replay/eval_hybrid_selected.json
+```
