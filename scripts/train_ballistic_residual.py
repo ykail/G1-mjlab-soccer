@@ -425,6 +425,14 @@ def main(cfg: Cfg) -> None:
       "base_hidden": (1024, 512, 256),
       "residual_scale": residual_scale,
     }
+    if cfg.failure_csv and cfg.failure_replay_ratio > 0.0:
+      saved["failure_replay"] = {
+        "csv": cfg.failure_csv,
+        "ratio": cfg.failure_replay_ratio,
+        "pos_jitter": cfg.failure_pos_jitter,
+        "vel_jitter": cfg.failure_vel_jitter,
+        "regions": tuple(cfg.failure_regions),
+      }
     saved["stable_save_eval"] = {
       "score": score,
       "stable_save_weight": cfg.stable_save_weight,
