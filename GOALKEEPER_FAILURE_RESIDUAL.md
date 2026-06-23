@@ -224,3 +224,94 @@ This route should be judged by official eval, not by training reward.  It is
 successful if it keeps the base policy's easy saves and improves the hard-case
 tail.  Because the residual is bounded and the base is frozen, a bad run should
 usually fail by doing nothing useful rather than destroying the keeper.
+
+## MoE6 Checkpoints
+
+PR #10's strong keeper is a MoE6 bundle, not a single actor.  Do not pass that
+bundle directly to `launch_keeper_failure_residual.py --init`; that trainer is
+for native MLP or ballistic-residual checkpoints.  For MoE6, keep the successful
+architecture intact and continue training the six specialists separately.
+
+First upload the 93% checkpoint:
+
+```bash
+mkdir -p checkpoints
+scp /path/to/goalkeeper_moe6_hard3_default.pt \
+  root@<server_ip>:/data/G1-mjlab-soccer/checkpoints/keeper_93_moe6.pt
+```
+
+On the H20 server:
+
+```bash
+cd /data/G1-mjlab-soccer
+git fetch ykail
+git switch codex/keeper-failure-residual
+git pull --ff-only
+
+export MUJOCO_GL=egl
+export PYOPENGL_PLATFORM=egl
+export WANDB_MODE=disabled
+```
+
+Collect failures from the MoE6 bundle:
+
+```bash
+python scripts/collect_goalkeeper_failures.py \
+  --checkpoint checkpoints/keeper_93_moe6.pt \
+  --out-csv logs/keeper_moe6_failure_replay/failures_keeper_93.csv \
+  --num-envs 4096 \
+  --batches 64 \
+  --device cuda:0
+```
+
+Extract the six experts:
+
+```bash
+python scripts/extract_moe6_experts.py \
+  --checkpoint checkpoints/keeper_93_moe6.pt \
+  --out-dir logs/keeper_moe6_failure_replay/base_experts
+```
+
+Continue-train the specialists with region-specific failure replay:
+
+```bash
+python scripts/launch_moe6_failure_replay.py \
+  --expert-dir logs/keeper_moe6_failure_replay/base_experts \
+  --failure-csv logs/keeper_moe6_failure_replay/failures_keeper_93.csv \
+  --out-dir logs/keeper_moe6_failure_replay/experts \
+  --bundle-out logs/keeper_moe6_failure_replay/keeper_93_failure_replay_moe6.pt \
+  --devices 0 1 2 3 \
+  --num-envs 8192 \
+  --blocks 60 \
+  --block-iters 12 \
+  --eval-resets 6
+```
+
+Evaluate the bundled result:
+
+```bash
+python scripts/eval_goalkeeper_official_seeds.py \
+  --checkpoint logs/keeper_moe6_failure_replay/keeper_93_failure_replay_moe6.pt \
+  --trials-per-seed 50 \
+  --parallel-seeds \
+  --seed-gpus 0 1 2 \
+  --out logs/keeper_moe6_failure_replay/eval_failure_replay_moe6.json
+```
+
+If region 3 still dominates failures, run a focused sweep:
+
+```bash
+python scripts/launch_moe6_failure_replay.py \
+  --expert-dir logs/keeper_moe6_failure_replay/base_experts \
+  --failure-csv logs/keeper_moe6_failure_replay/failures_keeper_93.csv \
+  --out-dir logs/keeper_moe6_failure_replay/experts_region3 \
+  --bundle-out logs/keeper_moe6_failure_replay/keeper_93_region3_moe6.pt \
+  --devices 0 \
+  --regions 3 \
+  --num-envs 8192 \
+  --failure-replay-ratio 0.75 \
+  --lr 1.5e-5 \
+  --std 0.018 \
+  --residual-scale 0.14 \
+  --blocks 80
+```
