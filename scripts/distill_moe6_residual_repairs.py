@@ -34,6 +34,7 @@ class Cfg:
   lr: float = 3.0e-4
   lr_final: float = 3.0e-5
   residual_scale: float = 0.18
+  residual_regions: tuple[int, ...] = (1, 2, 3, 5)
   residual_l2: float = 5.0e-4
   base_bc_coef: float = 0.05
   val_frac: float = 0.02
@@ -112,6 +113,7 @@ def main(cfg: Cfg) -> None:
     bundle,
     dev,
     residual_scale=cfg.residual_scale,
+    residual_regions=cfg.residual_regions,
   ).to(dev)
   optim = torch.optim.Adam(policy.residual.parameters(), lr=cfg.lr)
 
@@ -173,7 +175,7 @@ def main(cfg: Cfg) -> None:
     "hidden_dims": (512, 256, 128),
     "activation": "elu",
     "residual_scale": cfg.residual_scale,
-    "residual_regions": (1, 2, 3, 5),
+    "residual_regions": tuple(cfg.residual_regions),
     "source_data": tuple(cfg.data),
   }
   torch.save(saved, cfg.out)
