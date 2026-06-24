@@ -28,6 +28,8 @@ from .training_env_cfgs import (
   unitree_g1_goalkeeper_expert_adversarial_env_cfg,
   unitree_g1_goalkeeper_idle_adversarial_env_cfg,
   unitree_g1_goalkeeper_idle_training_env_cfg,
+  unitree_g1_goalkeeper_student_adversarial_env_cfg,
+  unitree_g1_goalkeeper_student_compete_adversarial_env_cfg,
   unitree_g1_goalkeeper_student_ppo_env_cfg,
   unitree_g1_goalkeeper_training_env_cfg,
   unitree_g1_shooter_adversarial_env_cfg,
@@ -136,6 +138,22 @@ register_mjlab_task(
   task_id="Unitree-G1-Goalkeeper-Student-PPO",
   env_cfg=unitree_g1_goalkeeper_student_ppo_env_cfg(),
   play_env_cfg=unitree_g1_goalkeeper_student_ppo_env_cfg(play=True),
+  rl_cfg=unitree_g1_goalkeeper_student_ppo_runner_cfg(),
+  runner_cls=GoalkeeperStudentRunner,
+)
+
+register_mjlab_task(
+  task_id="Unitree-G1-Goalkeeper-Student-Adversarial",
+  env_cfg=unitree_g1_goalkeeper_student_adversarial_env_cfg(),
+  play_env_cfg=unitree_g1_goalkeeper_student_adversarial_env_cfg(play=True),
+  rl_cfg=unitree_g1_goalkeeper_student_ppo_runner_cfg(),
+  runner_cls=GoalkeeperStudentRunner,
+)
+
+register_mjlab_task(
+  task_id="Unitree-G1-Goalkeeper-Student-Compete-Adversarial",
+  env_cfg=unitree_g1_goalkeeper_student_compete_adversarial_env_cfg(),
+  play_env_cfg=unitree_g1_goalkeeper_student_compete_adversarial_env_cfg(play=True),
   rl_cfg=unitree_g1_goalkeeper_student_ppo_runner_cfg(),
   runner_cls=GoalkeeperStudentRunner,
 )

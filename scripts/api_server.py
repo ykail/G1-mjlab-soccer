@@ -517,6 +517,17 @@ def _load_policy(checkpoint_path: str, task_id: str, device: str) -> tuple[Any, 
             print(f"[INFO] Policy loaded from: {checkpoint_path}")
             return policy, env, task_id
 
+        from scripts.eval_naive_goalkeeper import (
+            _is_goalkeeper_student_checkpoint,
+            _load_goalkeeper_student_policy,
+        )
+
+        if _is_goalkeeper_student_checkpoint(loaded):
+            print("[INFO] Detected position-conditioned goalkeeper student checkpoint.")
+            policy = _load_goalkeeper_student_policy(loaded, env, device)
+            print(f"[INFO] Policy loaded from: {checkpoint_path}")
+            return policy, env, task_id
+
         if task_id == _KEEPER_ADV_TASK_ID:
             print("[INFO] Detected adversarial goalkeeper ActorCritic checkpoint.")
             agent_cfg = unitree_g1_goalkeeper_adversarial_ppo_runner_cfg()

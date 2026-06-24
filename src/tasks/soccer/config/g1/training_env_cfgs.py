@@ -374,6 +374,24 @@ def unitree_g1_goalkeeper_student_ppo_env_cfg(play: bool = False) -> ManagerBase
   return configure_goalkeeper_student_ppo_env_cfg(cfg)
 
 
+def unitree_g1_goalkeeper_student_adversarial_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Single-network student goalkeeper training against a real frozen shooter."""
+  cfg = unitree_g1_goalkeeper_student_ppo_env_cfg(play=play)
+  return make_goalkeeper_adversarial_env_cfg(cfg, add_opponent_obs=False)
+
+
+def unitree_g1_goalkeeper_student_compete_adversarial_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Single-network keeper against frozen shooter with compete-like ball reset."""
+  cfg = unitree_g1_goalkeeper_training_env_cfg(play=play)
+  cfg = configure_goalkeeper_student_ppo_env_cfg(cfg)
+  cfg = configure_goalkeeper_prepare_adversarial_env_cfg(cfg)
+  cfg = make_goalkeeper_adversarial_env_cfg(cfg, add_opponent_obs=False)
+  cfg.scene.entities["opponent"] = _g1_robot_at((4.0, 0.0, 0.8), math.pi)
+  if "idle_low_base_height" in cfg.rewards:
+    cfg.rewards["idle_low_base_height"].params["target_z"] = 0.72
+  return cfg
+
+
 def unitree_g1_goalkeeper_idle_training_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   """G1 goalkeeper prepare/idle expert training with the original keeper env."""
   cfg = unitree_g1_goalkeeper_training_env_cfg(play=play)

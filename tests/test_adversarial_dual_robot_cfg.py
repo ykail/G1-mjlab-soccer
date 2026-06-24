@@ -171,6 +171,52 @@ class AdversarialDualRobotCfgTest(unittest.TestCase):
     self.assertNotIn("idle_low_base_height", cfg.rewards)
     self.assertNotIn("idle_leg_ready_pose", cfg.rewards)
 
+  def test_goalkeeper_student_adversarial_task_trains_single_network_against_shooter(self):
+    self.assertIn("Unitree-G1-Goalkeeper-Student-Adversarial", list_tasks())
+    cfg = load_env_cfg("Unitree-G1-Goalkeeper-Student-Adversarial")
+    rl_cfg = load_rl_cfg("Unitree-G1-Goalkeeper-Student-Adversarial")
+
+    self.assertIn("opponent", cfg.scene.entities)
+    self.assertIn("opponent_joint_pos", cfg.actions)
+    self.assertEqual(list(cfg.observations["actor"].terms.keys()), ["student"])
+    self.assertNotIn("opponent_root", cfg.observations["actor"].terms)
+    self.assertNotIn("opponent_joints", cfg.observations["actor"].terms)
+    self.assertIn("goal_conceded", cfg.rewards)
+    self.assertIn("idle_fall_penalty", cfg.rewards)
+    self.assertEqual(rl_cfg.actor.class_name, "GoalkeeperStudentFiLMActor")
+    self.assertEqual(
+      rl_cfg.algorithm.class_name,
+      "src.tasks.soccer.modules.goalkeeper_student_ppo:GoalkeeperStudentPPO",
+    )
+    self.assertEqual(
+      load_runner_cls("Unitree-G1-Goalkeeper-Student-Adversarial").__name__,
+      "GoalkeeperStudentRunner",
+    )
+
+  def test_goalkeeper_student_compete_adversarial_task_uses_static_shooter_ball(self):
+    self.assertIn("Unitree-G1-Goalkeeper-Student-Compete-Adversarial", list_tasks())
+    cfg = load_env_cfg("Unitree-G1-Goalkeeper-Student-Compete-Adversarial")
+    rl_cfg = load_rl_cfg("Unitree-G1-Goalkeeper-Student-Compete-Adversarial")
+
+    self.assertIn("opponent", cfg.scene.entities)
+    self.assertGreater(cfg.scene.entities["opponent"].init_state.pos[0], 3.0)
+    self.assertIn("opponent_joint_pos", cfg.actions)
+    self.assertEqual(list(cfg.observations["actor"].terms.keys()), ["student"])
+    self.assertNotIn("opponent_root", cfg.observations["actor"].terms)
+    self.assertEqual(cfg.events["reset_ball"].func.__name__, "reset_ball_static_for_goalkeeper_idle")
+    self.assertEqual(cfg.events["reset_ball"].params["ball_pos"], (3.0, 0.0, 0.1))
+    self.assertEqual(cfg.events["reset_ball"].params["idle_wait_range_s"], (8.0, 12.0))
+    self.assertIn("idle_fall_penalty", cfg.rewards)
+    self.assertIn("idle_leg_ready_pose", cfg.rewards)
+    self.assertEqual(cfg.terminations["time_out"].func.__name__, "time_out")
+    self.assertNotIn("ball_started", cfg.terminations)
+    self.assertAlmostEqual(cfg.episode_length_s, 12.0)
+    self.assertEqual(rl_cfg.actor.class_name, "GoalkeeperStudentFiLMActor")
+    self.assertEqual(
+      load_runner_cls("Unitree-G1-Goalkeeper-Student-Compete-Adversarial").__name__,
+      "GoalkeeperStudentRunner",
+    )
+
 
 if __name__ == "__main__":
   unittest.main()
