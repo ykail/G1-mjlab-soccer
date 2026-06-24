@@ -17,7 +17,7 @@ Run modes:
   --mode collect : optimize a large scenario sweep, dump (obs, action) dataset.
 """
 from __future__ import annotations
-import copy, os, sys
+import copy, csv, os, sys
 from dataclasses import dataclass
 from pathlib import Path
 import torch, tyro
@@ -63,6 +63,11 @@ class Cfg:
   seed: int = 0
   device: str = "cuda:0"
   out: str = ""              # collect: path to save dataset
+  scenario_csv: str = ""     # optional exact scenarios: region,start_*,vel_* columns
+  scenario_candidate: str = ""       # optional pairwise CSV filter: candidate == value
+  scenario_blocked_column: str = ""  # optional keep rows where this column is 0/false
+  scenario_pos_jitter: float = 0.0
+  scenario_vel_jitter: float = 0.0
   w_dist: float = 60.0       # cost weight on min blocking-link distance
   w_goal: float = 1000.0     # cost weight on conceding
   w_res: float = 0.2         # cost weight on residual L2
@@ -107,6 +112,64 @@ def _gen_scenarios(env, regions, region_weights, G, gen, device):
   start = torch.stack([start_x, start_y, start_z], -1)
   end = torch.stack([end_x, end_y, end_z], -1)
   return reg, start, end, t_flight
+
+
+def _truthy(value: str) -> bool:
+  return str(value).strip().lower() in ("1", "true", "yes", "y")
+
+
+def _load_scenario_csv(cfg: Cfg, device: str) -> dict[str, torch.Tensor] | None:
+  if not cfg.scenario_csv:
+    return None
+  rows = []
+  with open(cfg.scenario_csv, newline="") as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+      if cfg.scenario_candidate and row.get("candidate") != cfg.scenario_candidate:
+        continue
+      if cfg.scenario_blocked_column and cfg.scenario_blocked_column in row:
+        if _truthy(row[cfg.scenario_blocked_column]):
+          continue
+      rows.append(row)
+  if not rows:
+    raise ValueError(f"no scenarios selected from {cfg.scenario_csv}")
+
+  def req(row, key):
+    if key not in row or row[key] == "":
+      raise ValueError(f"{cfg.scenario_csv} row is missing required column {key}")
+    return float(row[key])
+
+  region = torch.tensor([int(float(row["region"])) for row in rows], dtype=torch.long, device=device)
+  start = torch.tensor(
+    [[req(row, "start_x"), req(row, "start_y"), req(row, "start_z")] for row in rows],
+    dtype=torch.float32,
+    device=device,
+  )
+  vel = torch.tensor(
+    [[req(row, "vel_x"), req(row, "vel_y"), req(row, "vel_z")] for row in rows],
+    dtype=torch.float32,
+    device=device,
+  )
+  print(
+    f"[INFO] loaded {len(rows)} exact scenarios from {cfg.scenario_csv} "
+    f"candidate={cfg.scenario_candidate or '<any>'} "
+    f"blocked_column={cfg.scenario_blocked_column or '<none>'}",
+    flush=True,
+  )
+  return {"region": region, "start": start, "vel": vel}
+
+
+def _sample_scenario_bank(bank, G, gen, device, pos_jitter: float, vel_jitter: float):
+  idx = torch.randint(0, bank["start"].shape[0], (G,), generator=gen, device=device)
+  reg = bank["region"][idx].clone()
+  start = bank["start"][idx].clone()
+  vel = bank["vel"][idx].clone()
+  if pos_jitter > 0.0:
+    start = start + torch.randn(G, 3, generator=gen, device=device) * pos_jitter
+    start[:, 2].clamp_(min=0.05)
+  if vel_jitter > 0.0:
+    vel = vel + torch.randn(G, 3, generator=gen, device=device) * vel_jitter
+  return reg, start, vel
 
 
 def _apply(env, robot, ball, start, vel, P, region):
@@ -157,6 +220,7 @@ def main(cfg: Cfg):
   robot = env.unwrapped.scene["robot"]; ball = env.unwrapped.scene["ball"]
   blk = torch.as_tensor(robot.find_bodies(_BLOCK_LINKS, preserve_order=True)[0], device=dev)
   gen = torch.Generator(device=dev); gen.manual_seed(cfg.seed)
+  scenario_bank = _load_scenario_csv(cfg, dev)
 
   T, K, J = cfg.horizon, cfg.knots, 29
   # Concentrate knots in the early SAVE window [0, knot_span] (the ball arrives at
@@ -243,8 +307,18 @@ def main(cfg: Cfg):
   all_data_obs, all_data_act, all_data_base_act, all_data_blk = [], [], [], []
   agg_base, agg_rep, agg_union, agg_n = 0, 0, 0, 0
   for b in range(cfg.batches):
-    reg, start, end, tf = _gen_scenarios(env, cfg.regions, cfg.region_weights, cfg.G, gen, dev)
-    vel = _ball_vel(start, end, tf)
+    if scenario_bank is None:
+      reg, start, end, tf = _gen_scenarios(env, cfg.regions, cfg.region_weights, cfg.G, gen, dev)
+      vel = _ball_vel(start, end, tf)
+    else:
+      reg, start, vel = _sample_scenario_bank(
+        scenario_bank,
+        cfg.G,
+        gen,
+        dev,
+        cfg.scenario_pos_jitter,
+        cfg.scenario_vel_jitter,
+      )
     # baseline (residual 0). In collect mode also record the base trajectory so
     # scenarios the base ALREADY blocks are taught with residual=0 (pure base
     # action) — this protects the easy-ball behavior from CEM residual noise.

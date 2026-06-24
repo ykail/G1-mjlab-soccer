@@ -1,10 +1,15 @@
 """Paired goalkeeper evaluation on identical ball trajectories.
 
-The normal official evaluator gives an aggregate score per checkpoint.  This
-script answers the more useful repair question: on the same seeded trials,
-which balls did a candidate fix, and which previously-saved balls did it lose?
-It samples each official trial once, then replays the exact ball state for the
-base and every candidate using the env's forced-reset path.
+The normal official evaluator gives an aggregate score per checkpoint. This
+script answers the more useful repair question: on the same sampled and
+forced-replayed trials, which balls did a candidate fix, and which previously
+saved balls did it lose? It samples each trial once, then replays the exact ball
+state for the base and every candidate using the env's forced-reset path.
+
+The aggregate rate can differ slightly from the official evaluator because the
+forced replay path resets the simulator again for each policy. Use this script
+for relative fixed/regressed diagnostics; use eval_goalkeeper_official_seeds.py
+for the final score.
 """
 
 from __future__ import annotations
