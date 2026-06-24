@@ -89,6 +89,14 @@ def _load_policy(checkpoint_path: str, env, device: str):
     print("[INFO] Policy loaded successfully.")
     return policy
 
+  if isinstance(loaded, dict) and loaded.get("keeper_patch_library"):
+    print("[INFO] Detected keeper patch-library checkpoint — loading patched policy.")
+    from src.tasks.soccer.modules.gk_moe6_patch_library import build_patch_library_policy
+
+    policy = build_patch_library_policy(loaded, env, device)
+    print("[INFO] Policy loaded successfully.")
+    return policy
+
   if isinstance(loaded, dict) and loaded.get("moe6_residual"):
     print("[INFO] Detected MoE6 residual checkpoint — loading frozen-base residual.")
     from src.tasks.soccer.modules.gk_moe6_residual import GoalkeeperMoE6ResidualPolicy

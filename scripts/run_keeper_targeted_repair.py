@@ -165,8 +165,10 @@ def _collect(cfg: Cfg, out_root: Path, deadline: float) -> list[str]:
     while free and time.monotonic() < deadline and shard_idx < cfg.max_shards:
       gpu = free.pop(0)
       out = repair_dir / f"targeted_shard{shard_idx:03d}.pt"
+      lib_out = repair_dir / f"targeted_library{shard_idx:03d}.pt"
       log = out_root / "logs" / f"collect_targeted_shard{shard_idx:03d}_gpu{gpu}.log"
       cmd = _repair_cmd(cfg, str(out), cfg.seed + shard_idx, cfg.collect_batches_per_shard)
+      cmd.extend(["--library-out", str(lib_out)])
       proc, handle = _popen(f"COLLECT {shard_idx}", cmd, log, gpu)
       running.append((shard_idx, gpu, out, proc, handle))
       shard_idx += 1

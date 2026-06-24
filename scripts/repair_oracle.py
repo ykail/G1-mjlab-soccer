@@ -63,6 +63,7 @@ class Cfg:
   seed: int = 0
   device: str = "cuda:0"
   out: str = ""              # collect: path to save dataset
+  library_out: str = ""      # collect: optional scenario->residual-sequence library
   scenario_csv: str = ""     # optional exact scenarios: region,start_*,vel_* columns
   scenario_candidate: str = ""       # optional pairwise CSV filter: candidate == value
   scenario_blocked_column: str = ""  # optional keep rows where this column is 0/false
@@ -305,6 +306,8 @@ def main(cfg: Cfg):
     return cost, ~entered, min_d
 
   all_data_obs, all_data_act, all_data_base_act, all_data_blk = [], [], [], []
+  lib_start, lib_vel, lib_region, lib_residual = [], [], [], []
+  lib_base_blocked, lib_repair_blocked = [], []
   agg_base, agg_rep, agg_union, agg_n = 0, 0, 0, 0
   for b in range(cfg.batches):
     if scenario_bank is None:
@@ -379,6 +382,15 @@ def main(cfg: Cfg):
       all_data_act.append(ac.reshape(-1, ac.shape[-1]))
       all_data_base_act.append(ba.reshape(-1, ba.shape[-1]))
       all_data_blk.append(blocked.reshape(-1))
+      if cfg.library_out:
+        repair_ok = rbk.bool()
+        if repair_ok.any():
+          lib_start.append(start[repair_ok.to(dev)].detach().cpu())
+          lib_vel.append(vel[repair_ok.to(dev)].detach().cpu())
+          lib_region.append(reg[repair_ok.to(dev)].detach().cpu())
+          lib_residual.append((rep_ac - rep_ba)[repair_ok].detach().cpu())
+          lib_base_blocked.append(bbk[repair_ok].detach().cpu())
+          lib_repair_blocked.append(rbk[repair_ok].detach().cpu())
     else:
       _, rep_blk, _ = rollout(mu_e, start, vel, reg)
     rep_rate = rep_blk.view(cfg.G, cfg.P).float().mean(1)
@@ -401,6 +413,31 @@ def main(cfg: Cfg):
     torch.save({"obs": obs, "act": act, "base_act": base_act, "blocked": bk}, cfg.out)
     print(f"  saved {obs.shape[0]} (obs,act) pairs to {cfg.out}  "
           f"(repaired-blocked frac {float(bk.float().mean()):.2f})")
+  if cfg.mode == "collect" and cfg.library_out:
+    Path(cfg.library_out).parent.mkdir(parents=True, exist_ok=True)
+    if lib_start:
+      payload = {
+        "start": torch.cat(lib_start),
+        "vel": torch.cat(lib_vel),
+        "region": torch.cat(lib_region).long(),
+        "residual_seq": torch.cat(lib_residual),
+        "base_blocked": torch.cat(lib_base_blocked).bool(),
+        "repair_blocked": torch.cat(lib_repair_blocked).bool(),
+      }
+    else:
+      payload = {
+        "start": torch.empty(0, 3),
+        "vel": torch.empty(0, 3),
+        "region": torch.empty(0, dtype=torch.long),
+        "residual_seq": torch.empty(0, T, J),
+        "base_blocked": torch.empty(0, dtype=torch.bool),
+        "repair_blocked": torch.empty(0, dtype=torch.bool),
+      }
+    torch.save(payload, cfg.library_out)
+    print(
+      f"  saved {payload['start'].shape[0]} repair-library entries to {cfg.library_out}",
+      flush=True,
+    )
   env.close()
 
 
