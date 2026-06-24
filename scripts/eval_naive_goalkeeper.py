@@ -102,6 +102,7 @@ def _load_policy(checkpoint_path: str, env, device: str):
       residual_scale=float(loaded.get("residual_scale", 0.18)),
     )
     policy.load_state_dict(loaded["policy_state_dict"], strict=False)
+    policy.to(device)
     policy.eval()
     print("[INFO] Policy loaded successfully.")
     return policy
