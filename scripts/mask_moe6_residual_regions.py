@@ -36,6 +36,9 @@ def main(cfg: Cfg) -> None:
     for subset in itertools.combinations(unique, size):
       item = dict(ckpt)
       item["residual_regions"] = tuple(int(r) for r in subset)
+      state = dict(item["policy_state_dict"])
+      state["_residual_regions"] = torch.tensor(item["residual_regions"], dtype=torch.long)
+      item["policy_state_dict"] = state
       path = out_dir / f"{Path(cfg.checkpoint).stem}_{_name(item['residual_regions'])}.pt"
       torch.save(item, path)
       written.append(str(path))
