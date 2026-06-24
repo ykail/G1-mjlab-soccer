@@ -175,6 +175,12 @@ def _read_prove_result(log_path: Path) -> tuple[float, float, float] | None:
   return float(base) / 100.0, float(repaired) / 100.0, float(union) / 100.0
 
 
+def _tail_text(path: Path, lines: int = 80) -> str:
+  if not path.exists():
+    return ""
+  return "\n".join(path.read_text(errors="replace").splitlines()[-lines:])
+
+
 def _collect(cfg: Cfg, out_root: Path, deadline: float) -> list[str]:
   repair_dir = out_root / "repairs"
   repair_dir.mkdir(parents=True, exist_ok=True)
@@ -262,6 +268,7 @@ def _distill_and_eval(cfg: Cfg, out_root: Path, shards: list[str]) -> list[dict]
         results.append({"name": name, "checkpoint": str(ckpt), "score": -1.0})
         continue
       eval_json = out_root / "eval" / f"eval_{name}.json"
+      eval_log = out_root / "logs" / f"eval_{name}.log"
       eval_cmd = [
         sys.executable,
         "scripts/eval_goalkeeper_official_seeds.py",
@@ -275,12 +282,25 @@ def _distill_and_eval(cfg: Cfg, out_root: Path, shards: list[str]) -> list[dict]
         "--out",
         str(eval_json),
       ]
-      code = _run("EVAL", eval_cmd, out_root / "logs" / f"eval_{name}.log", check=False)
+      code = _run("EVAL", eval_cmd, eval_log, check=False)
       score = -1.0
+      row = {
+        "name": name,
+        "checkpoint": str(ckpt),
+        "score": score,
+        "eval": str(eval_json),
+        "eval_log": str(eval_log),
+        "eval_returncode": code,
+      }
       if code == 0 and eval_json.exists():
         data = json.loads(eval_json.read_text())
         score = float(data.get("mean_block_rate", -1.0))
-      results.append({"name": name, "checkpoint": str(ckpt), "score": score, "eval": str(eval_json)})
+        row["score"] = score
+        row["status"] = "ok"
+      else:
+        row["status"] = "eval_failed"
+        row["log_tail"] = _tail_text(eval_log)
+      results.append(row)
   return results
 
 

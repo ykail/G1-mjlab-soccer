@@ -406,3 +406,20 @@ Outputs:
 This experiment should be treated as an A/B candidate generator.  If the best
 checkpoint in `summary.json` is not above the original MoE6 base under the same
 official protocol, discard it and keep the base.
+
+If `summary.json` contains `score: -1.0`, the checkpoints were distilled but the
+evaluation subprocess failed or did not write JSON.  Do not retrain.  Re-run
+only the official evaluation over the existing checkpoints:
+
+```bash
+python scripts/eval_keeper_big_repair.py \
+  --out-root logs/keeper_big_repair_v2 \
+  --include-base checkpoints/keeper_93_moe6.pt \
+  --devices 0 1 2 3 \
+  --trials-per-seed 50 \
+  --force
+```
+
+This writes `logs/keeper_big_repair_v2/eval_summary.json`.  Failed rows include
+the eval log path and log tail so loader/runtime errors are visible without
+opening every log by hand.
