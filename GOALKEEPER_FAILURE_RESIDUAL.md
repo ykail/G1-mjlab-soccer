@@ -423,3 +423,38 @@ python scripts/eval_keeper_big_repair.py \
 This writes `logs/keeper_big_repair_v2/eval_summary.json`.  Failed rows include
 the eval log path and log tail so loader/runtime errors are visible without
 opening every log by hand.
+
+### Recovering From Bad MoE6 Residual Checkpoints
+
+If distilled MoE6 residual checkpoints score far below the base policy, discard
+those checkpoints.  The expensive CEM repair shards can still be reused, but the
+distilled residuals must be regenerated after validating that the residual
+wrapper preserves the frozen base:
+
+```bash
+python scripts/make_moe6_zero_residual.py \
+  --base checkpoints/keeper_93_moe6.pt \
+  --out logs/keeper_big_repair_fixed/distilled/moe6_zero_residual.pt
+
+python scripts/eval_goalkeeper_official_seeds.py \
+  --checkpoint logs/keeper_big_repair_fixed/distilled/moe6_zero_residual.pt \
+  --trials-per-seed 50 \
+  --parallel-seeds \
+  --seed-gpus 0 1 2 \
+  --out logs/keeper_big_repair_fixed/eval/eval_zero_residual.json
+```
+
+The zero-residual score must match the original MoE6 base within evaluation
+noise.  Only then rerun distillation from existing repair shards:
+
+```bash
+python scripts/run_keeper_big_repair.py \
+  --base checkpoints/keeper_93_moe6.pt \
+  --out-root logs/keeper_big_repair_fixed \
+  --devices 0 1 2 3 \
+  --no-prove \
+  --no-collect \
+  --repair-data logs/keeper_big_repair_v2/repairs/repairs_shard*.pt \
+  --distill-epochs 70 \
+  --official-trials-per-seed 50
+```

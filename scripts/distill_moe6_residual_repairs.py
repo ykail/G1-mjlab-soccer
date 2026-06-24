@@ -68,7 +68,10 @@ def _load_data(cfg: Cfg) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | Non
     act = data["act"]
     base_act = data.get("base_act")
     if base_act is None:
-      has_base_act = False
+      raise ValueError(
+        f"{path} does not contain base_act. Recollect repair shards with the "
+        "current repair_oracle.py before distilling MoE6 residuals."
+      )
     if cfg.blocked_only:
       mask = data["blocked"].bool()
       obs = obs[mask]
@@ -133,9 +136,9 @@ def main(cfg: Cfg) -> None:
       yb = Y[idx].to(dev, non_blocking=True)
       bb = B[idx].to(dev, non_blocking=True) if B is not None else None
       obs = {"actor": xb}
-      pred = policy.forward(obs, use_latch=False)
       with torch.no_grad():
-        base = bb if bb is not None else policy.base_action(obs, use_latch=False)
+        base = bb
+      pred = policy.forward_from_base_action(xb, base)
       loss_bc = torch.nn.functional.smooth_l1_loss(pred, yb)
       loss_res = (pred - base).pow(2).mean()
       loss_base = torch.nn.functional.smooth_l1_loss(pred, base)
@@ -156,7 +159,8 @@ def main(cfg: Cfg) -> None:
             idx = val_idx[start : start + cfg.batch_size]
             xb = X[idx].to(dev, non_blocking=True)
             yb = Y[idx].to(dev, non_blocking=True)
-            pred = policy.forward({"actor": xb}, use_latch=False)
+            bb = B[idx].to(dev, non_blocking=True)
+            pred = policy.forward_from_base_action(xb, bb)
             losses.append(torch.nn.functional.smooth_l1_loss(pred, yb).detach().cpu())
         msg += f" val_huber={float(torch.stack(losses).mean()):.5f}"
       print(msg, flush=True)
@@ -169,6 +173,7 @@ def main(cfg: Cfg) -> None:
     "hidden_dims": (512, 256, 128),
     "activation": "elu",
     "residual_scale": cfg.residual_scale,
+    "residual_regions": (1, 2, 3, 5),
     "source_data": tuple(cfg.data),
   }
   torch.save(saved, cfg.out)

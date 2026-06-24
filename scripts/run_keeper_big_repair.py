@@ -34,6 +34,7 @@ class Cfg:
   collect: bool = True
   distill: bool = True
   eval: bool = True
+  repair_data: tuple[str, ...] = ()
   regions: tuple[int, ...] = (1, 2, 3, 5)
   region_weights: tuple[float, ...] = (1.2, 1.4, 2.0, 1.2)
   G: int = 16
@@ -49,8 +50,8 @@ class Cfg:
   continue_on_bad_prove: bool = False
   distill_epochs: int = 70
   batch_size: int = 32768
-  residual_scales: tuple[float, ...] = (0.08, 0.12, 0.18)
-  base_bc_coefs: tuple[float, ...] = (0.02, 0.05)
+  residual_scales: tuple[float, ...] = (0.02, 0.04, 0.08)
+  base_bc_coefs: tuple[float, ...] = (0.05, 0.15)
   official_trials_per_seed: int = 50
   seed: int = 2810
 
@@ -342,7 +343,7 @@ def main(cfg: Cfg) -> None:
         print("[PROVE] rerun with --continue-on-bad-prove only if you intentionally want to burn time.", flush=True)
         return
 
-  shards = _existing_shards(out_root)
+  shards = list(cfg.repair_data) if cfg.repair_data else _existing_shards(out_root)
   if cfg.collect:
     collect_deadline = deadline - 1.5 * 3600.0 if cfg.distill else deadline
     collect_deadline = max(time.monotonic() + 60.0, collect_deadline)

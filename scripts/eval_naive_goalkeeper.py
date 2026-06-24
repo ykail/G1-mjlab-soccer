@@ -100,6 +100,7 @@ def _load_policy(checkpoint_path: str, env, device: str):
       hidden_dims=tuple(loaded.get("hidden_dims", (512, 256, 128))),
       activation=str(loaded.get("activation", "elu")),
       residual_scale=float(loaded.get("residual_scale", 0.18)),
+      residual_regions=tuple(loaded.get("residual_regions", (1, 2, 3, 5))),
     )
     policy.load_state_dict(loaded["policy_state_dict"], strict=False)
     policy.to(device)
